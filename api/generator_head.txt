@@ -1,0 +1,324 @@
+﻿# -*- coding: utf-8 -*-
+"""
+视频生成器 - 核心生成逻辑
+"""
+import os
+import logging
+import time
+import uuid
+from typing import Optional, Dict, Any, List
+from pathlib import Path
+
+import torch
+from PIL import Image
+
+from .converter import AnisoraParams, ParameterConverter
+from .model_loader import create_model_loader
+
+
+logger = logging.getLogger(__name__)
+
+
+class VideoGenerator:
+    """视频生成器 - 封装AnisoraV3生成逻辑"""
+    
+    def __init__(
+        self,
+        checkpoint_dir: str = "Wan2.1-I2V-14B-480P",
+        output_dir: str = "output_videos_any",
+        distributed: bool = True,
+        world_size: int = 8,
+    ):
+        """初始化视频生成器
+        
+        Args:
+            checkpoint_dir: 模型检查点目录
+            output_dir: 输出目录
+            distributed: 是否使用分布式(8卡)
+            world_size: GPU数量
+        """
+        self.checkpoint_dir = checkpoint_dir
+        self.output_dir = output_dir
+        self.distributed = distributed
+        self.world_size = world_size
+        
+        # 创建输出目录
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        # 参数转换器
+        self.converter = ParameterConverter(checkpoint_dir=checkpoint_dir)
+        
+        # 模型加载器(延迟加载)
+        self.model_loader = None
+        self.model = None
+        
+    def _lazy_load_model(self, params: AnisoraParams) -> bool:
+        """延迟加载模型
+        
+        Args:
+            params: 生成参数
+            
+        Returns:
+            是否加载成功
+        """
+        if self.model is not None:
+            return True
+            
+        try:
+            # 创建模型加载器
+            self.model_loader = create_model_loader(
+                checkpoint_dir=self.checkpoint_dir,
+                task=params.task,
+                distributed=self.distributed,
+                world_size=self.world_size,
+            )
+            
+            # 加载模型
+            self.model = self.model_loader.load_model(
+                size=params.size,
+                t5_fsdp=params.t5_fsdp,
+                dit_fsdp=params.dit_fsdp,
+                t5_cpu=params.t5_cpu,
+            )
+            
+            return self.model is not None
+            
+        except Exception as e:
+            logger.error(f"Failed to load model: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def generate(
+        self,
+        prompt: str,
+        image_path: Optional[str] = None,
+        size: str = "720x1280",
+        seconds: str = "4",
+        seed: int = -1,
+    ) -> Dict[str, Any]:
+        """生成视频
+        
+        Args:
+            prompt: 文本提示词
+            image_path: 输入图像路径(Optional)
+            size: 分辨率 
+            seconds: 时长(秒)
+            seed: 随机种子
+            
+        Returns:
+            生成结果字典 {
+                "success": bool,
+                "video_path": str,  # 视频文件路径
+                "error": str,       # 错误信息(如果失败)
+                "metadata": dict   # 元数据
+            }
+        """
+        # 构建请求对象
+        from .converter import OpenAICreateVideoRequest
+
+        request = OpenAICreateVideoRequest(
+             prompt=prompt,
+             size=size,
+             seconds=seconds, 
+         )
+         
+         # 转换参数  
+         if image_path:
+             # 带图像的转换(从文件读取)
+             with open(image_path, 'rb') as f:
+                 image_data = f.read()
+             params = self.converter.convert_with_image(request, image_data)
+         else:
+             params = self.converter.convert(request)
+         
+         # 如果提供了seed，覆盖默认seed 
+         if seed >= 0:
+             params.base_seed = seed 
+         
+         # 延迟加载模型 
+         if not self._lazy_load_model(params):
+             return {
+                 "success": False,
+                 "video_path": None,
+                 "error": "Failed to load model",
+                 "metadata": {},
+             }
+         
+         try:
+             # 执行生成 
+             logger.info(f"Starting video generation: prompt={prompt[:50]}..., size={size}, seconds={seconds}")
+             
+             start_time = time.time()
+             
+             # 调用模型生成 
+             if image_path and params.image:
+                 # I2V模式 - 图像转视频  
+                 video_tensor = self._generate_i2v(params)
+             else:
+                 # T2V模式 - 文本转视频(暂不支持)  
+                 return {
+                     "success": False,
+                     "video_path": None,
+                     "error": "T2V mode not supported yet, please provide an image",
+                     "metadata": {},
+                 }
+             
+             elapsed_time = time.time() - start_time 
+             
+             # 保存视频 
+             video_path = self._save_video(video_tensor, params)
+             
+             # 清理临时文件 
+             self._cleanup_temp_files(params)
+             
+             return {
+                 "success": True,
+                 "video_path": video_path,
+                 "error": None,
+                 "metadata": {
+                     "prompt": prompt,
+                     "size": size,
+                     "seconds": seconds,
+                     "frame_num": params.frame_num,
+                     "seed": params.base_seed,
+                     "elapsed_time": elapsed_time,
+                 },
+             }
+             
+         except Exception as e:
+             logger.error(f"Failed to generate video: {e}")
+             import traceback 
+             traceback.print_exc()
+             
+             return {
+                 "success": False, 
+                 "video_path": None,
+                 "error": str(e),
+                 "metadata": {},
+             }
+    
+    def _generate_i2v(self, params: AnisoraParams) -> torch.Tensor:
+         """执行I2V生成 
+         
+         Args:
+             params: 生成参数 
+             
+         Returns:
+             生成的视频tensor 
+         """
+         
+         # 加载输入图像  
+         img_list = [Image.open(params.image)]
+         
+         # 时间轴位置列表(0到1之间，0表示开始，1表示结束)  
+         tid_list = [0.0]  # 从第一帧开始生成
+         
+         # 调用模型生成 
+         video_tensor = self.model.generate(
+             input_prompt=params.prompt,
+             Img_list=img_list, 
+             Tid_list=tid_list,
+             max_area=int(params.size.split('x')[0]) * int(params.size.split('x')[1]),
+             frame_num=params.frame_num,
+             shift=params.sample_shift,
+             sample_solver=params.sample_solver, 
+             sampling_step=params.sample_step,
+             guide_scale=params.sample_guide_scale,
+             n_prompt="",  # 使用默认负提示词
+             seed=params.base_seed, 
+             offload_model=params.offload_model, 
+         )
+         
+         return video_tensor
+    
+    def _save_video(self, video_tensor: torch.Tensor, params: AnisoraParams) -> str:
+         """保存视频到文件 
+         
+         Args:
+              video_tensor: 视频tensor (C, N, H, W)  
+              params: 生成参数  
+              
+         Returns:
+              保存的文件路径  
+         """
+         
+         from wan.utils.utils import cache_video
+         
+         # 生成唯一文件名  
+         filename = f"video_{uuid.uuid4().hex[:8]}.mp4"
+         save_path = os.path.join(self.output_dir, filename)
+         
+         # 保存视频  
+         cache_video(video_tensor, save_path)
+         
+         logger.info(f"Video saved to: {save_path}")
+         
+         return save_path
+    
+    def _cleanup_temp_files(self, params: AnisoraParams):
+          """清理临时文件  
+          
+          Args:
+               params: 生成参数  
+          """
+          import shutil
+          
+          for temp_dir in getattr(params, 'temp_dirs', []):
+              try:
+                  if os.path.exists(temp_dir):
+                      shutil.rmtree(temp_dir)
+                      logger.info(f"Cleaned up temp directory: {temp_dir}")
+              except Exception as e:
+                  logger.warning(f"Failed to cleanup temp directory {temp_dir}: {e}")
+    
+    def cleanup(self):
+          """清理资源"""
+          if self.model_loader:
+              self.model_loader.cleanup()
+              
+          if torch.cuda.is_available():
+              torch.cuda.empty_cache()
+
+
+# 全局生成器实例(单例模式)  
+_generator_instance: Optional[VideoGenerator] = None
+
+
+def get_generator(
+    checkpoint_dir: str = "Wan2.1-I2V-14B-480P",
+    output_dir: str = "output_video_any", 
+    distributed: bool = True,
+    world_size: int = 8,
+) -> VideoGenerator:
+     """获取全局生成器实例(单例模式)  
+     
+     Args:
+          checkpoint_dir: 模型检查点目录  
+          output_dir: 输出目录  
+          distributed: 是否使用分布式(8卡)  
+          world_size: GPU数量  
+          
+     Returns:
+          VideoGenerator实例  
+     """
+     global _generator_instance
+     
+     if _generator_instance is None:
+          _generator_instance = VideoGenerator(
+              checkpoint_dir=checkpoint_dir,
+              output_dir=output_dir, 
+              distributed=distributed,
+              world_size=world_size, 
+          )
+     
+     return _generator_instance
+
+
+def reset_generator():
+      """重置全局生成器实例"""
+      global _generator_instance
+      
+      if _generator_instance:
+           _generator_instance.cleanup()
+           _generator_instance = None
