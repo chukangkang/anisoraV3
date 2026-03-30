@@ -32,6 +32,7 @@ class VideoTask:
     completed_at: Optional[int] = None  # 完成时间戳
     video_path: Optional[str] = None  # 视频文件路径
     error: Optional[str] = None   # 错误信息
+    video_type: Optional[str] = None  # 视频类型(normal/360)
     
     
 class TaskManager:
@@ -49,6 +50,7 @@ class TaskManager:
         size: str = "720x1280",
         seconds: str = "4",
         quality: str = "standard",
+        video_type: Optional[str] = None,
     ) -> VideoTask:
         """创建新任务
         
@@ -58,6 +60,7 @@ class TaskManager:
             size: 分辨率
             seconds: 时长(秒)
             quality: 质量
+            video_type: 视频类型(normal/360)
             
         Returns:
             创建的任务对象
@@ -74,6 +77,7 @@ class TaskManager:
             status=VideoStatus.QUEUED.value,
             progress=0,
             created_at=int(time.time()),
+            video_type=video_type,
         )
         
         with self._lock:

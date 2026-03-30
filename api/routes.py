@@ -191,6 +191,109 @@ async def run_generation_task(
         )
 
 
+async def run_generation_task_360(
+    task_id: str,
+    prompt: str,
+    image_data: Optional[bytes],
+    size: str,
+    seconds: str,
+):
+    """在后台运行360度旋转视频生成任务
+
+    Args:
+        task_id: 任务ID
+        prompt: 提示词(包含图像路径格式: image_path@@prompt&&image_position)
+        image_data: 图像数据(可选)
+        size: 分辨率
+        seconds: 时长(秒)
+    """
+
+    from .converter import ParameterConverter
+
+    task_manager = get_task_manager()
+    generator = get_generator(
+        checkpoint_dir=MODEL_CONFIG.checkpoint_dir,
+        output_dir="/root/anisoraV3/output_videos_360",
+        distributed=True,  # 8卡分布式
+        world_size=8,
+    )
+
+    try:
+        # 更新状态为处理中
+        task_manager.update_task(task_id, status=VideoStatus.PROCESSING.value, progress=10)
+
+        # 参数转换 - 360度使用不同的转换器配置
+        converter = ParameterConverter(checkpoint_dir=MODEL_CONFIG.checkpoint_dir)
+
+        # 创建任务工作目录 (使用任务ID命名)
+        project_root = "/root/anisoraV3"
+        input_base_dir = os.path.join(project_root, "anisora_input")
+        work_dir = os.path.join(input_base_dir, task_id)
+
+        request = OpenAICreateVideoRequest(
+            prompt=prompt,
+            size=size,
+            seconds=seconds,
+        )
+
+        # 360度模式：使用传入的image_data或从prompt解析
+        if image_data:
+            # 使用传入的图像数据
+            params = converter.convert_with_image(request, image_data, work_dir=work_dir)
+        elif "@@" in prompt:
+            # 从prompt中提取图像路径 (格式: image_path@@prompt&&image_position)
+            image_part = prompt.split("@@")[0]
+            if os.path.exists(image_part):
+                params = converter.convert(request)
+                params.image = image_part
+            else:
+                params = converter.convert(request)
+        else:
+            params = converter.convert(request)
+
+        # 更新进度
+        task_manager.update_task(task_id, progress=30)
+
+        # 执行360度生成 - 使用frame_num=81 (5秒@16fps)
+        result = generator.generate_360(
+            prompt=prompt,
+            image_path=params.image if hasattr(params, 'image') and params.image else None,
+            size=size,
+            seconds=seconds,
+            seed=params.base_seed,
+            task_id=task_id,
+            frame_num=81,  # 360度推荐81帧
+        )
+
+        # 更新结果
+        if result["success"]:
+            task_manager.update_task(
+                task_id,
+                status=VideoStatus.COMPLETED.value,
+                progress=100,
+                video_path=result["video_path"],
+            )
+            logger.info(f"Task {task_id} 360 completed successfully")
+        else:
+            task_manager.update_task(
+                task_id,
+                status=VideoStatus.FAILED.value,
+                error=result["error"],
+            )
+            logger.error(f"Task {task_id} 360 failed: {result['error']}")
+
+    except Exception as e:
+        logger.error(f"Task {task_id} 360 error: {e}")
+        import traceback
+        traceback.print_exc()
+
+        task_manager.update_task(
+            task_id,
+            status=VideoStatus.FAILED.value,
+            error=str(e),
+        )
+
+
 @app.get("/v1/videos")
 async def list_videos(limit: int = 20, before: Optional[str] = None):
      """列出视频(GET /v1/videos)
@@ -227,109 +330,76 @@ async def create_video(
     size: Optional[str] = Form(None),
     seconds: Optional[str] = Form(None),
     quality: Optional[str] = Form(None),
-):
-     """创建视频(POST /v1/videos)
-     
-     OpenAI兼容接口 - 创建新的视频生成任务
-     
-     支持两种方式:
-     1. 表单方式 - 使用Form参数 + 可选的图像文件  
-     2. JSON方式 - 使用application/json Content-Type  
-     
-     Args:
-          prompt: 文本提示词(必填)  
-          model: 模型名称(sora-2或sora-2-pro)  
-          size: 分辨率(720x1280, 1280x720, 1024x1792, 1792x1024)  
-          seconds: 时长(4, 8, 12)  
-          quality: 质量(standard或high)  
-          
-     Returns:
-          视频任务响应  
-     """
-     
-     # 参数验证  
-     if not validate_openai_params(model=model, size=size, seconds=seconds):
-         raise HTTPException(
-             status_code=400,
-             detail="Invalid parameter value"
-         )
-     
-     # 设置默认值  
-     model = model or API_CONFIG.default_model  
-     size = size or API_CONFIG.default_size  
-     seconds = seconds or API_CONFIG.default_seconds  
-     
-     # 创建任务  
-     task_manager = get_task_manager()
-     
-     task = task_manager.create_task(
-         prompt=prompt,
-         model=model,
-         size=size, 
-         seconds=seconds,
-         quality=quality or API_CONFIG.default_quality,
-     )
-     
-     # 添加后台任务执行T2V生成(纯文本，无图像)
-     background_tasks.add_task(
-         run_generation_task,
-         task_id=task.id,
-         prompt=prompt,
-         image_data=None,  # T2V无图像
-         size=size,
-         seconds=seconds,
-     )
-     
-     # 返回响应(任务排队)  
-     return task_to_response(task)
-
-
-@app.post("/v1/videos/generation", response_model=VideoResponse)
-async def create_video_with_image(
-    background_tasks: BackgroundTasks,
-    prompt: str = Form(...),
-    model: Optional[str] = Form(None),
-    size: Optional[str] = Form(None),
-    seconds: Optional[str] = Form(None),
-    quality: Optional[str] = Form(None),
     image: UploadFile = File(None),
+    image_url: Optional[str] = Form(None),
 ):
-    """创建视频 - 带图像版本
-    
-    这个端点专门用于处理带图像的请求(Multipart表单上传)
-    
+    """创建视频(POST /v1/videos)
+
+    OpenAI兼容接口 - 基于图像生成视频(I2V)
+
+    支持两种图片输入方式:
+    1. 本地文件上传 - 使用image参数
+    2. URL链接 - 使用image_url参数
+
     Args:
         prompt: 文本提示词(必填)
         model: 模型名称
         size: 分辨率
         seconds: 时长(4, 8, 12)
         quality: 质量
-        image: 输入图像文件(Optional)
-        
+        image: 本地图像文件(必填，与image_url二选一)
+        image_url: 图像URL链接(必填，与image二选一)
+
     Returns:
         视频任务响应
     """
-    
-    # 参数验证
+
+    # 参数验证 - 图片必须提供
+    if not image and not image_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Image is required for video generation. Please provide either 'image' (local file) or 'image_url' (URL link)."
+        )
+
+    if image and image_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Please provide only one of 'image' or 'image_url', not both."
+        )
+
     if not validate_openai_params(model=model, size=size, seconds=seconds):
         raise HTTPException(
             status_code=400,
             detail="Invalid parameter value"
         )
-    
+
     # 设置默认值
     model = model or API_CONFIG.default_model
     size = size or API_CONFIG.default_size
     seconds = seconds or API_CONFIG.default_seconds
-    
-    # 读取图像数据
+
+    # 处理图片数据 - 本地文件或URL
     image_data = None
+
     if image:
+        # 本地文件上传
         image_data = await image.read()
-    
+    elif image_url:
+        # URL链接下载
+        try:
+            import requests
+            response = requests.get(image_url, timeout=30)
+            response.raise_for_status()
+            image_data = response.content
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to download image from URL: {str(e)}"
+            )
+
     # 创建任务
     task_manager = get_task_manager()
-    
+
     task = task_manager.create_task(
         prompt=prompt,
         model=model,
@@ -337,7 +407,7 @@ async def create_video_with_image(
         seconds=seconds,
         quality=quality or API_CONFIG.default_quality,
     )
-    
+
     # 添加后台任务执行生成
     background_tasks.add_task(
         run_generation_task,
@@ -347,7 +417,107 @@ async def create_video_with_image(
         size=size,
         seconds=seconds,
     )
-    
+
+    return task_to_response(task)
+
+
+@app.post("/v1/videos/360", response_model=VideoResponse)
+async def create_video_360(
+    background_tasks: BackgroundTasks,
+    prompt: str = Form(...),
+    model: Optional[str] = Form(None),
+    size: Optional[str] = Form(None),
+    seconds: Optional[str] = Form(None),
+    quality: Optional[str] = Form(None),
+    image: UploadFile = File(None),
+    image_url: Optional[str] = Form(None),
+):
+    """创建360度旋转视频(POST /v1/videos/360)
+
+    360-Degree Character Rotation - 基于输入图像生成360度旋转视频
+
+    支持两种图片输入方式:
+    1. 本地文件上传 - 使用image参数
+    2. URL链接 - 使用image_url参数
+
+    Args:
+        prompt: 文本提示词(必填)
+        model: 模型名称
+        size: 分辨率(推荐1280x720)
+        seconds: 时长(推荐5秒确保完整360度旋转)
+        quality: 质量
+        image: 本地图像文件(可选，与image_url二选一)
+        image_url: 图像URL链接(可选，与image二选一)
+
+    Returns:
+        视频任务响应
+    """
+
+    # 参数验证 - 图片必须提供
+    if not image and not image_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Image is required for 360-degree video generation. Please provide either 'image' (local file) or 'image_url' (URL link)."
+        )
+
+    if image and image_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Please provide only one of 'image' or 'image_url', not both."
+        )
+
+    if not validate_openai_params(model=model, size=size, seconds=seconds):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid parameter value"
+        )
+
+    # 设置默认值 - 360度推荐5秒
+    model = model or API_CONFIG.default_model
+    size = size or "1280x720"
+    seconds = seconds or "5"
+
+    # 创建任务
+    task_manager = get_task_manager()
+
+    task = task_manager.create_task(
+        prompt=prompt,
+        model=model,
+        size=size,
+        seconds=seconds,
+        quality=quality or API_CONFIG.default_quality,
+        video_type="360",  # 标记为360度旋转视频
+    )
+
+    # 处理图片数据 - 本地文件或URL
+    image_data = None
+
+    if image:
+        # 本地文件上传
+        image_data = await image.read()
+    elif image_url:
+        # URL链接下载
+        try:
+            import requests
+            response = requests.get(image_url, timeout=30)
+            response.raise_for_status()
+            image_data = response.content
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to download image from URL: {str(e)}"
+            )
+
+    # 添加后台任务执行360度生成
+    background_tasks.add_task(
+        run_generation_task_360,
+        task_id=task.id,
+        prompt=prompt,
+        image_data=image_data,
+        size=size,
+        seconds=seconds,
+    )
+
     return task_to_response(task)
 
 

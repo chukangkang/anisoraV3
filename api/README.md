@@ -8,6 +8,7 @@
 - ✅ **8卡分布式** - 支持多 GPU 分布式模型加载
 - ✅ **异步任务** - 后台任务队列，支持状态查询
 - ✅ **图像转视频(I2V)** - 支持从图像生成视频
+- ✅ **360度角色旋转** - 支持360度角色旋转视频生成
 
 ## 支持的参数
 
@@ -36,22 +37,53 @@ python run_api.py
 
 ### 创建视频任务 (POST /v1/videos)
 
+图像转视频(I2V)模式，需要提供输入图像。
+
+#### 本地文件方式
+
 ```bash
 curl -X POST http://localhost:8000/v1/videos \
-  -F "prompt=A cat playing piano on stage" \
-  -F "size=720x1280" \
-  -F "seconds=8"
-```
-
-### 带图像创建视频 (POST /v1/videos/generation)
-
-```bash
-curl -X POST http://localhost:8000/v1/videos/generation \
   -F "prompt=A cat playing piano on stage" \
   -F "size=720x1280" \
   -F "seconds=8" \
   -F "image=@/path/to/image.jpg"
 ```
+
+#### I2V图像模式 (URL链接)
+
+```bash
+curl -X POST http://localhost:8000/v1/videos \
+  -F "prompt=A cat playing piano on stage" \
+  -F "size=720x1280" \
+  -F "seconds=8" \
+  -F "image_url=https://example.com/image.jpg"
+```
+
+### 创建360度旋转视频 (POST /v1/videos/360)
+
+360度角色旋转功能，需要提供输入图像。
+
+#### 本地文件方式
+
+```bash
+curl -X POST http://localhost:8000/v1/videos/360 \
+  -F "prompt=A 360-degree turning and circling video of an anime character..." \
+  -F "size=1280x720" \
+  -F "seconds=5" \
+  -F "image=@/path/to/image.jpg"
+```
+
+#### URL链接方式
+
+```bash
+curl -X POST http://localhost:8000/v1/videos/360 \
+  -F "prompt=A 360-degree turning and circling video of an anime character..." \
+  -F "size=1280x720" \
+  -F "seconds=5" \
+  -F "image_url=https://example.com/image.jpg"
+```
+
+> 注意：360度接口必须提供图片（本地文件或URL链接），推荐使用5秒时长以确保完整的360度旋转。
 
 ### 获取视频状态 (GET /v1/videos/{video_id})
 
@@ -104,12 +136,13 @@ run_api.py              # 服务入口
 
 ### Python 调用示例
 
+#### I2V图像转视频 (本地文件)
+
 ```python
 import requests
 
-# 创建视频任务
 response = requests.post(
-    "http://localhost:8000/v1/videos/generation",
+    "http://localhost:8000/v1/videos",
     data={
         "prompt": "A cat playing piano on stage",
         "size": "720x1280",
@@ -120,7 +153,28 @@ response = requests.post(
 
 task = response.json()
 print(f"Task ID: {task['id']}")
-print(f"Status: {task['status']}")
+```
+
+#### I2V图像转视频 (URL链接)
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8000/v1/videos",
+    data={
+        "prompt": "A cat playing piano on stage",
+        "size": "720x1280",
+        "seconds": "8",
+        "image_url": "https://example.com/image.jpg"
+    }
+)
+```
+
+#### 查询状态和下载
+
+```python
+import requests
 
 # 查询状态
 status_response = requests.get(f"http://localhost:8000/v1/videos/{task['id']}")
@@ -131,4 +185,24 @@ if status_response.json()['status'] == 'completed':
     video_response = requests.get(f"http://localhost:8000/v1/videos/{task['id']}/content")
     with open("output.mp4", "wb") as f:
         f.write(video_response.content)
+```
+
+#### 生成360度旋转视频
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8000/v1/videos/360",
+    data={
+        "prompt": "A 360-degree turning and circling video of an anime character...",
+        "size": "1280x720",
+        "seconds": "5",
+    },
+    files={"image": open("character.png", "rb")}
+)
+
+task = response.json()
+print(f"Task ID: {task['id']}")
+print(f"Status: {task['status']}")
 ```

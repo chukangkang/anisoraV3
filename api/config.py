@@ -24,6 +24,7 @@ class VideoSize(str, Enum):
 class VideoSeconds(str, Enum):
     """支持的视频时长(秒)"""
     FOUR_SECONDS = "4"
+    FIVE_SECONDS = "5"  # 360度推荐
     EIGHT_SECONDS = "8"
     TWELVE_SECONDS = "12"
 
@@ -143,6 +144,7 @@ def get_frame_num_from_seconds(seconds_str: str) -> int:
     """
     seconds_map = {
         VideoSeconds.FOUR_SECONDS.value: 33,
+        VideoSeconds.FIVE_SECONDS.value: 81,  # 360度推荐
         VideoSeconds.EIGHT_SECONDS.value: 65,
         VideoSeconds.TWELVE_SECONDS.value: 97,
     }
