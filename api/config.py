@@ -144,7 +144,7 @@ def get_frame_num_from_seconds(seconds_str: str) -> int:
     """
     seconds_map = {
         VideoSeconds.FOUR_SECONDS.value: 33,
-        VideoSeconds.FIVE_SECONDS.value: 81,  # 360度推荐
+        VideoSeconds.FIVE_SECONDS.value: 41,  # 360度推荐
         VideoSeconds.EIGHT_SECONDS.value: 65,
         VideoSeconds.TWELVE_SECONDS.value: 97,
     }
