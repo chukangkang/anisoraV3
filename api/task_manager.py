@@ -6,10 +6,10 @@ import os
 import time
 import uuid
 import logging
+import asyncio
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
 from enum import Enum
-from threading import Lock
 
 from .config import VideoStatus
 
@@ -41,9 +41,9 @@ class TaskManager:
     def __init__(self):
         """初始化任务管理器"""
         self._tasks: Dict[str, VideoTask] = {}
-        self._lock = Lock()
+        self._lock = asyncio.Lock()
         
-    def create_task(
+    async def create_task(
         self,
         prompt: str,
         model: str = "sora-2",
@@ -80,14 +80,14 @@ class TaskManager:
             video_type=video_type,
         )
         
-        with self._lock:
+        async with self._lock:
             self._tasks[task_id] = task
             
         logger.info(f"Created task: {task_id}")
         
         return task
     
-    def get_task(self, task_id: str) -> Optional[VideoTask]:
+    async def get_task(self, task_id: str) -> Optional[VideoTask]:
         """获取任务
         
         Args:
@@ -96,10 +96,10 @@ class TaskManager:
         Returns:
             任务对象，不存在返回None
         """
-        with self._lock:
+        async with self._lock:
             return self._tasks.get(task_id)
     
-    def update_task(
+    async def update_task(
         self,
         task_id: str,
         status: Optional[str] = None,
@@ -119,7 +119,7 @@ class TaskManager:
         Returns:
             是否更新成功
         """
-        with self._lock:
+        async with self._lock:
             if task_id not in self._tasks:
                 return False
             
@@ -145,7 +145,7 @@ class TaskManager:
             
             return True
     
-    def list_tasks(self, limit: int = 100) -> List[VideoTask]:
+    async def list_tasks(self, limit: int = 100) -> List[VideoTask]:
          """列出所有任务 
          
          Args:
@@ -154,7 +154,7 @@ class TaskManager:
          Returns:
              任务列表(按创建时间倒序)  
          """
-         with self._lock:
+         async with self._lock:
              tasks = sorted(
                  self._tasks.values(), 
                  key=lambda t: t.created_at, 
@@ -162,7 +162,7 @@ class TaskManager:
              )
              return tasks[:limit]
     
-    def delete_task(self, task_id: str) -> bool:
+    async def delete_task(self, task_id: str) -> bool:
          """删除任务  
          
          Args:
@@ -171,7 +171,7 @@ class TaskManager:
          Returns:
              是否删除成功  
          """
-         with self._lock:
+         async with self._lock:
              if task_id in self._tasks:
                  del self._tasks[task_id]
                  return True 

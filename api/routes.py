@@ -4,8 +4,9 @@ FastAPI路由模块 - OpenAI兼容的视频生成API
 """
 import os
 import time
+import asyncio
 import logging
-from typing import Optional, List
+from typing import Optional, List, Union
 from pathlib import Path
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
@@ -106,7 +107,7 @@ async def run_generation_task(
     size: str,
     seconds: str,
 ):
-    """在后台运行视频生成任务
+    """在后台运行视频生成任务 (在独立线程中执行，避免阻塞事件循环)
 
     Args:
         task_id: 任务ID
@@ -115,20 +116,50 @@ async def run_generation_task(
         size: 分辨率
         seconds: 时长(秒)
     """
+    # 在线程池中执行耗时的同步生成任务，避免阻塞事件循环
+    await asyncio.to_thread(_run_generation_task_sync, task_id, prompt, image_data, size, seconds)
 
+
+def _run_generation_task_sync(
+    task_id: str,
+    prompt: str,
+    image_data: Optional[bytes],
+    size: str,
+    seconds: str,
+):
+    """同步执行视频生成任务 (在线程池中运行)
+
+    Args:
+        task_id: 任务ID
+        prompt: 提示词
+        image_data: 图像数据(可选)
+        size: 分辨率
+        seconds: 时长(秒)
+    """
+    import asyncio
     from .converter import ParameterConverter
 
-    task_manager = get_task_manager()
-    generator = get_generator(
-        checkpoint_dir=MODEL_CONFIG.checkpoint_dir,
-        output_dir="/root/anisoraV3/output_videos_any",
-        distributed=True,  # 8卡分布式
-        world_size=8,
-    )
+    # 创建新的事件循环来运行异步代码
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     try:
-        # 更新状态为处理中
-        task_manager.update_task(task_id, status=VideoStatus.PROCESSING.value, progress=10)
+        # 获取task_manager和generator (在线程中)
+        task_manager = get_task_manager()
+        
+        # 使用同步方式获取generator (避免在同步函数中调用async get_generator)
+        from .generator import VideoGenerator
+        generator = VideoGenerator(
+            checkpoint_dir=MODEL_CONFIG.checkpoint_dir,
+            output_dir="/root/anisoraV3/output_videos_any",
+            distributed=True,
+            world_size=8,
+        )
+
+        # 更新状态为处理中 - 需要在线程中创建协程并运行
+        loop.run_until_complete(
+            task_manager.update_task(task_id, status=VideoStatus.PROCESSING.value, progress=10)
+        )
 
         # 参数转换
         converter = ParameterConverter(checkpoint_dir=MODEL_CONFIG.checkpoint_dir)
@@ -150,9 +181,9 @@ async def run_generation_task(
             params = converter.convert(request)
 
         # 更新进度
-        task_manager.update_task(task_id, progress=30)
+        loop.run_until_complete(task_manager.update_task(task_id, progress=30))
 
-        # 执行生成
+        # 执行生成 (这是耗时的同步操作，会在线程中阻塞但不会影响主事件循环)
         result = generator.generate(
             prompt=prompt,
             image_path=params.image if hasattr(params, 'image') else None,
@@ -164,18 +195,22 @@ async def run_generation_task(
 
         # 更新结果
         if result["success"]:
-            task_manager.update_task(
-                task_id,
-                status=VideoStatus.COMPLETED.value,
-                progress=100,
-                video_path=result["video_path"],
+            loop.run_until_complete(
+                task_manager.update_task(
+                    task_id,
+                    status=VideoStatus.COMPLETED.value,
+                    progress=100,
+                    video_path=result["video_path"],
+                )
             )
             logger.info(f"Task {task_id} completed successfully")
         else:
-            task_manager.update_task(
-                task_id,
-                status=VideoStatus.FAILED.value,
-                error=result["error"],
+            loop.run_until_complete(
+                task_manager.update_task(
+                    task_id,
+                    status=VideoStatus.FAILED.value,
+                    error=result["error"],
+                )
             )
             logger.error(f"Task {task_id} failed: {result['error']}")
 
@@ -184,21 +219,25 @@ async def run_generation_task(
         import traceback
         traceback.print_exc()
 
-        task_manager.update_task(
-            task_id,
-            status=VideoStatus.FAILED.value,
-            error=str(e),
+        loop.run_until_complete(
+            task_manager.update_task(
+                task_id,
+                status=VideoStatus.FAILED.value,
+                error=str(e),
+            )
         )
+    finally:
+        loop.close()
 
 
 async def run_generation_task_360(
     task_id: str,
     prompt: str,
-    image_data: Optional[bytes],
+    image_data: Optional[bytearray],
     size: str,
     seconds: str,
 ):
-    """在后台运行360度旋转视频生成任务
+    """在后台运行360度旋转视频生成任务 (在独立线程中执行避免阻塞事件循环)
 
     Args:
         task_id: 任务ID
@@ -207,20 +246,50 @@ async def run_generation_task_360(
         size: 分辨率
         seconds: 时长(秒)
     """
+    # 在线程池中执行耗时的同步生成任务，避免阻塞事件循环
+    await asyncio.to_thread(_run_generation_task_360_sync, task_id, prompt, image_data, size, seconds)
 
+
+def _run_generation_task_360_sync(
+    task_id: str,
+    prompt: str,
+    image_data: Optional[bytearray],
+    size: str,
+    seconds: str,
+):
+    """同步执行360度旋转视频生成任务 (在线程池中运行)
+
+    Args:
+        task_id: 任务ID
+        prompt: 提示词(包含图像路径格式: image_path@@prompt&&image_position)
+        image_data: 图像数据(可选)
+        size: 分辨率
+        seconds: 时长(秒)
+    """
+    import asyncio
     from .converter import ParameterConverter
 
-    task_manager = get_task_manager()
-    generator = get_generator(
-        checkpoint_dir=MODEL_CONFIG.checkpoint_dir,
-        output_dir="/root/anisoraV3/output_videos_360",
-        distributed=True,  # 8卡分布式
-        world_size=8,
-    )
+    # 创建新的事件循环来运行异步代码
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     try:
-        # 更新状态为处理中
-        task_manager.update_task(task_id, status=VideoStatus.PROCESSING.value, progress=10)
+        # 获取task_manager和generator (在线程中)
+        task_manager = get_task_manager()
+        
+        # 使用同步方式获取generator (避免在同步函数中调用async get_generator)
+        from .generator import VideoGenerator
+        generator = VideoGenerator(
+            checkpoint_dir=MODEL_CONFIG.checkpoint_dir,
+            output_dir="/root/anisoraV3/output_videos_360",
+            distributed=True,
+            world_size=8,
+        )
+
+        # 更新状态为处理中 - 需要在线程中创建协程并运行
+        loop.run_until_complete(
+            task_manager.update_task(task_id, status=VideoStatus.PROCESSING.value, progress=10)
+        )
 
         # 参数转换 - 360度使用不同的转换器配置
         converter = ParameterConverter(checkpoint_dir=MODEL_CONFIG.checkpoint_dir)
@@ -239,7 +308,7 @@ async def run_generation_task_360(
         # 360度模式：使用传入的image_data或从prompt解析
         if image_data:
             # 使用传入的图像数据
-            params = converter.convert_with_image(request, image_data, work_dir=work_dir)
+            params = converter.convert_with_image(request, bytes(image_data), work_dir=work_dir)
         elif "@@" in prompt:
             # 从prompt中提取图像路径 (格式: image_path@@prompt&&image_position)
             image_part = prompt.split("@@")[0]
@@ -252,9 +321,9 @@ async def run_generation_task_360(
             params = converter.convert(request)
 
         # 更新进度
-        task_manager.update_task(task_id, progress=30)
+        loop.run_until_complete(task_manager.update_task(task_id, progress=30))
 
-        # 执行360度生成 - 使用frame_num=81 (5秒@16fps)
+        # 执行360度生成 (这是耗时的同步操作，会在线程中阻塞但不会影响主事件循环)
         result = generator.generate_360(
             prompt=prompt,
             image_path=params.image if hasattr(params, 'image') and params.image else None,
@@ -267,18 +336,22 @@ async def run_generation_task_360(
 
         # 更新结果
         if result["success"]:
-            task_manager.update_task(
-                task_id,
-                status=VideoStatus.COMPLETED.value,
-                progress=100,
-                video_path=result["video_path"],
+            loop.run_until_complete(
+                task_manager.update_task(
+                    task_id,
+                    status=VideoStatus.COMPLETED.value,
+                    progress=100,
+                    video_path=result["video_path"],
+                )
             )
             logger.info(f"Task {task_id} 360 completed successfully")
         else:
-            task_manager.update_task(
-                task_id,
-                status=VideoStatus.FAILED.value,
-                error=result["error"],
+            loop.run_until_complete(
+                task_manager.update_task(
+                    task_id,
+                    status=VideoStatus.FAILED.value,
+                    error=result["error"],
+                )
             )
             logger.error(f"Task {task_id} 360 failed: {result['error']}")
 
@@ -287,11 +360,15 @@ async def run_generation_task_360(
         import traceback
         traceback.print_exc()
 
-        task_manager.update_task(
-            task_id,
-            status=VideoStatus.FAILED.value,
-            error=str(e),
+        loop.run_until_complete(
+            task_manager.update_task(
+                task_id,
+                status=VideoStatus.FAILED.value,
+                error=str(e),
+            )
         )
+    finally:
+        loop.close()
 
 
 @app.get("/v1/videos")
@@ -309,7 +386,7 @@ async def list_videos(limit: int = 20, before: Optional[str] = None):
      """
      
      task_manager = get_task_manager()
-     tasks = task_manager.list_tasks(limit=limit)
+     tasks = await task_manager.list_tasks(limit=limit)
      
      # 转换为响应格式  
      video_list = [task_to_response(task) for task in tasks]
@@ -400,7 +477,7 @@ async def create_video(
     # 创建任务
     task_manager = get_task_manager()
 
-    task = task_manager.create_task(
+    task = await task_manager.create_task(
         prompt=prompt,
         model=model,
         size=size,
@@ -480,7 +557,7 @@ async def create_video_360(
     # 创建任务
     task_manager = get_task_manager()
 
-    task = task_manager.create_task(
+    task = await task_manager.create_task(
         prompt=prompt,
         model=model,
         size=size,
@@ -535,7 +612,7 @@ async def retrieve_video(video_id: str):
       """
       
       task_manager = get_task_manager()
-      task = task_manager.get_task(video_id)
+      task = await task_manager.get_task(video_id)
       
       if not task:
           raise HTTPException(status_code=404, detail="Video not found")
@@ -559,7 +636,7 @@ async def delete_video(video_id: str):
       task_manager = get_task_manager()
       
       # 检查任务是否存在  
-      task = task_manager.get_task(video_id)
+      task = await task_manager.get_task(video_id)
       if not task:
           raise HTTPException(status_code=404, detail="Video not found")
       
@@ -572,7 +649,7 @@ async def delete_video(video_id: str):
               logger.warning(f"Failed to delete video file {task.video_path}: {e}")
       
       # 删除任务记录  
-      success = task_manager.delete_task(video_id)
+      success = await task_manager.delete_task(video_id)
       
       if success:
           return {"deleted": video_id, "object": "video"}
@@ -594,7 +671,7 @@ async def download_video_content(video_id: str):
     """
 
     task_manager = get_task_manager()
-    task = task_manager.get_task(video_id)
+    task = await task_manager.get_task(video_id)
 
     if not task:
         raise HTTPException(status_code=404, detail="Video not found")
