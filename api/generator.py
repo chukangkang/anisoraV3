@@ -475,26 +475,15 @@ class VideoGenerator:
         # 准备prompt文件 - 格式: prompt@@image_path (相对于work_dir的路径)
         prompt_file_name = "prompt.txt"
         
-        # 判断是I2V还是T2V任务
-        is_i2v = image_path and os.path.exists(image_path)
+        # 判断是I2V还是T2V任务（支持多图：检查prompt中是否包含@@）
+        is_i2v = (image_path and os.path.exists(image_path)) or ("@@" in prompt and "input_image" in prompt)
         
         if is_i2v:
-            # I2V模式 - 复制图像并写入带图像的prompt文件
-            input_image_name = "input_image.jpg"
-            input_image_path_in_workdir = os.path.join(work_dir, input_image_name)
-            
-            # 如果图像已经在工作目录中（由converter保存），则跳过复制
-            if os.path.abspath(image_path) != os.path.abspath(input_image_path_in_workdir):
-                shutil.copy(image_path, input_image_path_in_workdir)
-                logger.info(f"Copied image to work directory: {input_image_path_in_workdir}")
-            else:
-                logger.info(f"Image already in work directory: {input_image_path_in_workdir}")
-            
-            # 写入prompt文件 - 格式: prompt@@image_path&&time_position (与官方脚本一致)
+            # I2V模式 - 直接使用传入的prompt（已包含多图配置）
             with open(os.path.join(work_dir, prompt_file_name), 'w', encoding='utf-8') as f:
-                f.write(f"{prompt}@@{input_image_name}&&0.0")
+                f.write(prompt)
             
-            logger.info(f"Prepared I2V prompt file in {work_dir}: {prompt}@@{input_image_name}&&0.0")
+            logger.info(f"Prepared I2V prompt file in {work_dir}: {prompt[:100]}...")
             
             task_type = "i2v-14B"
         else:

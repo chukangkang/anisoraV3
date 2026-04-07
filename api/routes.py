@@ -103,36 +103,40 @@ def task_to_response(task: VideoTask) -> VideoResponse:
 async def run_generation_task(
     task_id: str,
     prompt: str,
-    image_data: Optional[bytes],
-    size: str,
-    seconds: str,
+    images_data: Optional[List[bytes]] = None,
+    weight_config: str = "&&1",
+    size: str = "720x1280",
+    seconds: str = "4",
 ):
-    """在后台运行视频生成任务 (在独立线程中执行，避免阻塞事件循环)
+    """在后台运行视频生成任务 (在独立线程中执行避免阻塞事件循环)
 
     Args:
         task_id: 任务ID
         prompt: 提示词
-        image_data: 图像数据(可选)
+        images_data: 图片数据列表(可选)
+        weight_config: 图片权重配置，如"&&1"或"&&1,1"
         size: 分辨率
         seconds: 时长(秒)
     """
     # 在线程池中执行耗时的同步生成任务，避免阻塞事件循环
-    await asyncio.to_thread(_run_generation_task_sync, task_id, prompt, image_data, size, seconds)
+    await asyncio.to_thread(_run_generation_task_sync, task_id, prompt, images_data, weight_config, size, seconds)
 
 
 def _run_generation_task_sync(
     task_id: str,
     prompt: str,
-    image_data: Optional[bytes],
-    size: str,
-    seconds: str,
+    images_data: Optional[List[bytes]] = None,
+    weight_config: str = "&&1",
+    size: str = "720x1280",
+    seconds: str = "4",
 ):
     """同步执行视频生成任务 (在线程池中运行)
 
     Args:
         task_id: 任务ID
         prompt: 提示词
-        image_data: 图像数据(可选)
+        images_data: 图片数据列表(可选)
+        weight_config: 图片权重配置
         size: 分辨率
         seconds: 时长(秒)
     """
@@ -175,8 +179,14 @@ def _run_generation_task_sync(
             seconds=seconds,
         )
 
-        if image_data:
-            params = converter.convert_with_image(request, image_data, work_dir=work_dir)
+        # 根据图片数量选择转换方法
+        if images_data and len(images_data) > 0:
+            params = converter.convert_with_images(
+                request, 
+                images_data, 
+                weight_config=weight_config,
+                work_dir=work_dir
+            )
         else:
             params = converter.convert(request)
 
@@ -185,8 +195,8 @@ def _run_generation_task_sync(
 
         # 执行生成 (这是耗时的同步操作，会在线程中阻塞但不会影响主事件循环)
         result = generator.generate(
-            prompt=prompt,
-            image_path=params.image if hasattr(params, 'image') else None,
+            prompt=params.prompt,  # 使用增强后的prompt（包含权重配置）
+            image_path=None,      # 多图模式下在prompt中指定
             size=size,
             seconds=seconds,
             seed=params.base_seed,
@@ -407,16 +417,25 @@ async def create_video(
     size: Optional[str] = Form(None),
     seconds: Optional[str] = Form(None),
     quality: Optional[str] = Form(None),
-    image: UploadFile = File(None),
-    image_url: Optional[str] = Form(None),
+    image: UploadFile = File(default=None),
+    image_url: Optional[str] = Form(default=None),
+    image_url1: Optional[str] = Form(default=None),
+    image_url2: Optional[str] = Form(default=None),
 ):
     """创建视频(POST /v1/videos)
 
     OpenAI兼容接口 - 基于图像生成视频(I2V)
 
-    支持两种图片输入方式:
-    1. 本地文件上传 - 使用image参数
-    2. URL链接 - 使用image_url参数
+    支持本地文件或URL链接:
+    - 本地文件: image, image1, image2 (最多3张)
+    - URL链接: image_url, image_url1, image_url2 (最多3张)
+
+    支持多张图片上传（最多3张），支持本地文件或URL链接：
+    - 单图：使用image参数，权重配置为&&1
+    - 双图：使用image和image1参数，权重配置为&&1,1  
+    - 三图：使用image、image1、image2参数，权重配置为&&0.3,0.7,1
+    
+    URL链接方式：使用 image_url 参数（单图URL）
 
     Args:
         prompt: 文本提示词(必填)
@@ -424,24 +443,29 @@ async def create_video(
         size: 分辨率
         seconds: 时长(4, 8, 12)
         quality: 质量
-        image: 本地图像文件(必填，与image_url二选一)
-        image_url: 图像URL链接(必填，与image二选一)
+        image: 第一张图像文件或URL链接(必填)
+        image1: 第二张图像文件或URL链接(可选)
+        image2: 第三张图像文件或URL链接(可选)
 
     Returns:
         视频任务响应
     """
 
-    # 参数验证 - 图片必须提供
-    if not image and not image_url:
+    # 参数验证 - 必须提供至少一张图片（本地文件或URL）
+    # 参数验证 - 必须提供至少一张图片（本地文件或URL）
+    has_local_image = image is not None
+    has_url_image = any([image_url, image_url1, image_url2])
+    
+    if not has_local_image and not has_url_image:
         raise HTTPException(
             status_code=400,
-            detail="Image is required for video generation. Please provide either 'image' (local file) or 'image_url' (URL link)."
+            detail="At least one image is required for video generation."
         )
 
-    if image and image_url:
+    if has_local_image and has_url_image:
         raise HTTPException(
             status_code=400,
-            detail="Please provide only one of 'image' or 'image_url', not both."
+            detail="Please provide either local files or URL links, not both."
         )
 
     if not validate_openai_params(model=model, size=size, seconds=seconds):
@@ -455,24 +479,38 @@ async def create_video(
     size = size or API_CONFIG.default_size
     seconds = seconds or API_CONFIG.default_seconds
 
-    # 处理图片数据 - 本地文件或URL
-    image_data = None
 
-    if image:
-        # 本地文件上传
-        image_data = await image.read()
-    elif image_url:
-        # URL链接下载
-        try:
-            import requests
-            response = requests.get(image_url, timeout=30)
-            response.raise_for_status()
-            image_data = response.content
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Failed to download image from URL: {str(e)}"
-            )
+    # 处理多张图片数据并获取权重配置
+    from .converter import get_image_weight_config
+    
+    images_data_list = []
+    
+    if has_local_image:
+        # 本地文件模式 - 收集所有上传的图片
+        for img_file in [image]:
+            if img_file is not None:
+                img_data = await img_file.read()
+                images_data_list.append(img_data)
+    else:
+        # URL链接模式 - 收集所有URL链接
+        url_list = [url for url in [image_url, image_url1, image_url2] if url]
+        
+        for url in url_list:
+            try:
+                import requests
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+                images_data_list.append(response.content)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to download image from URL: {str(e)}"
+                )
+    
+    # 根据图片数量获取权重配置
+    weight_config = get_image_weight_config(len(images_data_list))
+    
+    logger.info(f"Processing {len(images_data_list)} images with weight config: {weight_config}")
 
     # 创建任务
     task_manager = get_task_manager()
@@ -485,17 +523,19 @@ async def create_video(
         quality=quality or API_CONFIG.default_quality,
     )
 
-    # 添加后台任务执行生成
+    # 添加后台任务执行生成（传入图片列表和权重配置）
     background_tasks.add_task(
         run_generation_task,
         task_id=task.id,
         prompt=prompt,
-        image_data=image_data,
+        images_data=images_data_list,  # 改为图片列表
+        weight_config=weight_config,   # 传入权重配置
         size=size,
         seconds=seconds,
     )
 
     return task_to_response(task)
+
 
 
 @app.post("/v1/videos/360", response_model=VideoResponse)

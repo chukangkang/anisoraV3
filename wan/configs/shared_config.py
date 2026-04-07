@@ -15,7 +15,7 @@ wan_shared_cfg.param_dtype = torch.float16
 
 # inference
 wan_shared_cfg.num_train_timesteps = 1000
-wan_shared_cfg.sample_fps = 8
+wan_shared_cfg.sample_fps = 16
 wan_shared_cfg.sample_solver = 'unipc'
 wan_shared_cfg.unipc_order = 2
 wan_shared_cfg.unipc_skip_type = 'time_uniform'

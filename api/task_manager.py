@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-任务管理模块 - 异步任务状态管理
+任务管理模块 - 异步任务状态管理 (支持持久化)
 """
 import os
 import time
 import uuid
+import json
 import logging
 import asyncio
 from typing import Optional, Dict, Any, List
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from enum import Enum
 
 from .config import VideoStatus
 
 
 logger = logging.getLogger(__name__)
+
+# 持久化文件路径
+TASKS_FILE = "/root/anisoraV3/data/tasks.json"
 
 
 @dataclass
@@ -36,12 +40,50 @@ class VideoTask:
     
     
 class TaskManager:
-    """任务管理器 - 管理异步视频生成任务"""
+    """任务管理器 - 管理异步视频生成任务 (支持持久化)"""
     
     def __init__(self):
         """初始化任务管理器"""
         self._tasks: Dict[str, VideoTask] = {}
         self._lock = asyncio.Lock()
+        
+        # 确保数据目录存在并加载已有任务
+        self._ensure_data_dir()
+        self._load_tasks()
+    
+    def _ensure_data_dir(self):
+        """确保数据目录存在"""
+        data_dir = os.path.dirname(TASKS_FILE)
+        if data_dir and not os.path.exists(data_dir):
+            os.makedirs(data_dir, exist_ok=True)
+            logger.info(f"Created data directory: {data_dir}")
+    
+    def _load_tasks(self):
+        """从磁盘加载已有任务"""
+        if os.path.exists(TASKS_FILE):
+            try:
+                with open(TASKS_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                for task_data in data:
+                    task = VideoTask(**task_data)
+                    self._tasks[task.id] = task
+                
+                logger.info(f"Loaded {len(self._tasks)} tasks from disk")
+            except Exception as e:
+                logger.error(f"Failed to load tasks from disk: {e}")
+    
+    def _save_tasks(self):
+        """保存所有任务到磁盘"""
+        try:
+            tasks_data = [asdict(task) for task in self._tasks.values()]
+            
+            with open(TASKS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(tasks_data, f, ensure_ascii=False, indent=2)
+            
+            logger.debug(f"Saved {len(self._tasks)} tasks to disk")
+        except Exception as e:
+            logger.error(f"Failed to save tasks to disk: {e}")
         
     async def create_task(
         self,
@@ -82,6 +124,7 @@ class TaskManager:
         
         async with self._lock:
             self._tasks[task_id] = task
+            self._save_tasks()  # 持久化保存
             
         logger.info(f"Created task: {task_id}")
         
@@ -143,6 +186,7 @@ class TaskManager:
             if error:
                 task.error = error
             
+            self._save_tasks()  # 持久化保存
             return True
     
     async def list_tasks(self, limit: int = 100) -> List[VideoTask]:
@@ -174,6 +218,7 @@ class TaskManager:
          async with self._lock:
              if task_id in self._tasks:
                  del self._tasks[task_id]
+                 self._save_tasks()  # 持久化保存
                  return True 
              return False
 

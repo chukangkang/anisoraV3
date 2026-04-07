@@ -26,7 +26,7 @@ class VideoSeconds(str, Enum):
     FOUR_SECONDS = "4"
     FIVE_SECONDS = "5"  # 360度推荐
     EIGHT_SECONDS = "8"
-    TWELVE_SECONDS = "12"
+    TWELVE_SECONDS = "10"
 
 
 class VideoQuality(str, Enum):
@@ -70,7 +70,7 @@ DISTRIBUTED_CONFIG.master_port = 29500
 
 # 生成参数配置 - 与官方generate-pi-i2v-any.py启动参数一致
 GENERATION_CONFIG = EasyDict()
-GENERATION_CONFIG.sample_steps = 8   # 采样步数 (官方默认40，但可配置)
+GENERATION_CONFIG.sample_step = 8  # 采样步数 (官方默认40，可配置，25是平衡质量和速度的值)
 GENERATION_CONFIG.sample_shift = 5.0  # shift参数 (官方默认5.0，480*832时为3.0)
 GENERATION_CONFIG.sample_guide_scale = 1.0  # guidance scale (官方默认1.0)
 GENERATION_CONFIG.sample_solver = "unipc"  # 采样求解器
@@ -89,7 +89,7 @@ def calculate_frame_num(seconds: int) -> int:
     Returns:
         帧数 (4n+1格式)
     """
-    return seconds * 8 + 1
+    return seconds * 16 + 1
 
 
 # OpenAI尺寸到AnisoraV3尺寸的映射
@@ -137,15 +137,15 @@ def get_frame_num_from_seconds(seconds_str: str) -> int:
     """从OpenAI seconds参数获取帧数
     
     Args:
-        seconds_str: OpenAI秒数字符串 ("4", "8", "12")
+        second_str: OpenAI秒数字符串 ("4", "5", "8", "10")
     
     Returns:
-        对应的帧数 (33, 65, 97)
+        对应的帧数 (65, 81, 129, 161)
     """
-    seconds_map = {
-        VideoSeconds.FOUR_SECONDS.value: 33,
-        VideoSeconds.FIVE_SECONDS.value: 41,  # 360度推荐
-        VideoSeconds.EIGHT_SECONDS.value: 65,
-        VideoSeconds.TWELVE_SECONDS.value: 97,
+    second_map = {
+        VideoSeconds.FOUR_SECONDS.value: 65,
+        VideoSeconds.FIVE_SECONDS.value: 81,  # 360度推荐
+        VideoSeconds.EIGHT_SECONDS.value: 129,
+        VideoSeconds.TWELVE_SECONDS.value: 161,
     }
-    return seconds_map.get(seconds_str, 33)
+    return second_map.get(second_str, 65)

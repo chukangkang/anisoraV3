@@ -2,7 +2,8 @@
 """
 参数转换模块 - OpenAI API参数转换为AnisoraV3参数
 """
-from typing import Optional, Dict, Any, List
+import logging
+from typing import Optional, Dict, Any, List, Union
 from dataclasses import dataclass, field
 from PIL import Image
 import io
@@ -10,6 +11,51 @@ import os
 import tempfile
 
 from .config import GENERATION_CONFIG as GEN_CFG
+
+logger = logging.getLogger(__name__)
+
+# 默认提示词后缀（质量评分）
+DEFAULT_PROMPT_SUFFIX = "aesthetic score: 5.5. motion score: 3.0. There is no text in the video."
+
+# 图片权重配置
+IMAGE_WEIGHT_CONFIGS = {
+    1: "&&1",      # 单图主引导
+    2: "&&1,1",   # 双图首尾帧
+    3: "&&0.3,0.7,1",  # 三张图
+}
+
+
+def enhance_prompt(prompt: str) -> str:
+    """增强提示词，追加质量评分参数
+    
+    Args:
+        prompt: 原始提示词
+        
+    Returns:
+        增强后的提示词
+    """
+    # 检查是否已包含质量评分后缀
+    if "aesthetic score:" in prompt.lower() or "motion score:" in prompt.lower():
+        return prompt
+    
+    # 追加默认后缀
+    return f"{prompt}. {DEFAULT_PROMPT_SUFFIX}"
+
+
+def get_image_weight_config(image_count: int) -> str:
+    """获取图片权重配置
+    
+    Args:
+        image_count: 图片数量
+        
+    Returns:
+        权重配置字符串，如 "&&1" 或 "&&1,1"
+    """
+    if image_count in IMAGE_WEIGHT_CONFIGS:
+        return IMAGE_WEIGHT_CONFIGS[image_count]
+    
+    # 默认单图配置
+    return IMAGE_WEIGHT_CONFIGS[1]
 
 
 @dataclass
@@ -48,7 +94,7 @@ class OpenAICreateVideoRequest:
 def get_frame_number_for_seconds(seconds_str: str) -> int:
     """根据秒数计算帧数"""
     second_int = int(seconds_str) if seconds_str else 4
-    return second_int * 8 + 1
+    return second_int * 16 + 1
 
 
 class ParameterConverter:
@@ -83,14 +129,13 @@ class ParameterConverter:
         seconds_str = request.seconds or "4"
         params.frame_num = get_frame_number_for_seconds(seconds_str)
         
-        # 设置提示词和种子
-        params.prompt = request.prompt
+        # 设置提示词 - 增强提示词追加质量评分参数
+        params.prompt = enhance_prompt(request.prompt)
         
-        import time
-        params.base_seed = int(time.time()) % (2**31)
+        # base_seed 使用 dataclass 默认值 4096
         
         # 使用默认采样参数(从GENERATION_CONFIG读取)
-        params.sample_step = GEN_CFG.sample_steps
+        params.sample_step = GEN_CFG.sample_step
         
         # 根据分辨率动态设置sample_shift (与官方逻辑一致)
         if params.size == "480*832" or params.size == "832*480":
@@ -158,5 +203,90 @@ class ParameterConverter:
         params.image = image_path
         if temp_dir:
             params.temp_dirs.append(temp_dir)
+        
+        return params
+    
+    def convert_with_images(
+        self, 
+        request: OpenAICreateVideoRequest, 
+        images_data_list: List[bytes], 
+        weight_config: str = "&&1",
+        work_dir: str = None
+    ) -> AnisoraParams:
+        """将OpenAI请求(带多张图像)转换为AnisoraV3参数
+        
+        Args:
+            request: OpenAI请求对象
+            images_data_list: 图片数据列表
+            weight_config: 图片权重配置，如"&&1"或"&&1,1"
+            work_dir: 工作目录
+            
+        Returns:
+            AnisoraParams参数对象
+        """
+        # 先调用基础转换方法获取基本参数对象
+        params = self.convert(request)
+        
+        # 保存图像到指定目录或临时文件
+        if work_dir:
+            image_dir = work_dir
+            os.makedirs(image_dir, exist_ok=True)
+            temp_dir = None
+        else:
+            temp_dir = tempfile.mkdtemp(prefix="anisora_input_")
+            image_dir = temp_dir
+        
+        # 根据图片数量设置文件名
+        image_names = []
+        
+        for idx, image_data in enumerate(images_data_list):
+            # 先设置图片路径
+            image_name = f"input_image_{idx}.jpg"
+            image_path = os.path.join(image_dir, image_name)
+            
+            # 根据目标尺寸调整图像(保持宽高比)
+            target_width, target_height = map(int, params.size.replace('*', 'x').split('x'))
+            
+            img = Image.open(io.BytesIO(image_data))
+            
+            img_width, img_height = img.size
+            aspect_ratio_target = target_width / target_height  
+            aspect_ratio_image = img_width / img_height
+            
+            # 处理图像并保存
+            if aspect_ratio_image > aspect_ratio_target:
+                new_height = target_height
+                new_width = int(new_height * aspect_ratio_image)
+                img_resized = img.resize((new_width, new_height), Image.LANCZOS)
+                crop_left = (new_width - target_width) // 2
+                img_final = img_resized.crop((crop_left, 0, crop_left + target_width, target_height))
+            elif aspect_ratio_image < aspect_ratio_target:
+                new_width = target_width
+                new_height = int(new_width / aspect_ratio_image)
+                img_resized = img.resize((new_width, new_height), Image.LANCZOS)
+                crop_top = (new_height - target_height) // 2
+                img_final = img_resized.crop((0, crop_top, target_width, crop_top + target_height))
+            else:
+                img_final = img.resize((target_width, target_height), Image.LANCZOS)
+            
+            # 保存图片
+            img_final.save(image_path, quality=95)
+            image_names.append(image_name)
+        
+        # 设置图像路径（多图用逗号分隔）和权重配置
+        # 格式: image1.jpg,image2.jpg@@prompt&&weight_config
+        images_str = ",".join(image_names)
+        
+        # 修改prompt添加权重配置：prompt@@image1.jpg,image2.jpg&&weight_config
+        enhanced_prompt = f"{params.prompt}@@{images_str}{weight_config}"
+        
+        params.prompt = enhanced_prompt
+        # 设置第一个图片的完整路径，让generator识别为I2V任务
+        params.image = os.path.join(image_dir, image_names[0])
+        
+        if temp_dir:
+            params.temp_dirs.append(temp_dir)
+        
+        logger.info(f"Created multi-image prompt: {enhanced_prompt}, first image: {params.image}")
         
         return params
