@@ -48,7 +48,7 @@ API_CONFIG = EasyDict()
 
 # 服务配置
 API_CONFIG.host = "0.0.0.0"
-API_CONFIG.port = 8000
+API_CONFIG.port = 12800
 API_CONFIG.workers = 1  # FastAPI workers数量
 
 # 模型配置

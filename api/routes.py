@@ -9,9 +9,11 @@ import logging
 from typing import Optional, List, Union
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
+from typing import Optional, List, Union
+from pathlib import Path
 
 from .config import (
     API_CONFIG,
@@ -53,6 +55,7 @@ class CreateVideoRequest(BaseModel):
     size: Optional[str] = None
     seconds: Optional[str] = None
     quality: Optional[str] = None
+
 
 
 class VideoResponse(BaseModel):
@@ -412,7 +415,8 @@ async def list_videos(limit: int = 20, before: Optional[str] = None):
 @app.post("/v1/videos", response_model=VideoResponse)
 async def create_video(
     background_tasks: BackgroundTasks,
-    prompt: str = Form(...),
+    request: Request,
+    prompt: str = Form(None),
     model: Optional[str] = Form(None),
     size: Optional[str] = Form(None),
     seconds: Optional[str] = Form(None),
@@ -426,16 +430,17 @@ async def create_video(
 
     OpenAI兼容接口 - 基于图像生成视频(I2V)
 
-    支持本地文件或URL链接:
-    - 本地文件: image, image1, image2 (最多3张)
-    - URL链接: image_url, image_url1, image_url2 (最多3张)
+    支持两种请求格式:
+    1. multipart/form-data: 本地文件或URL链接
+       - 本地文件: image, image1, image2 (最多3张)
+       - URL链接: image_url, image_url1, image_url2 (最多3张)
+    2. application/json: URL链接或Base64
+       - image, image1, image2 (最多3张)
 
-    支持多张图片上传（最多3张），支持本地文件或URL链接：
-    - 单图：使用image参数，权重配置为&&1
-    - 双图：使用image和image1参数，权重配置为&&1,1  
-    - 三图：使用image、image1、image2参数，权重配置为&&0.3,0.7,1
-    
-    URL链接方式：使用 image_url 参数（单图URL）
+    多图权重配置:
+    - 单图：权重为1.0
+    - 双图：权重各0.5  
+    - 三图：权重0.3, 0.7, 1.0
 
     Args:
         prompt: 文本提示词(必填)
@@ -443,15 +448,111 @@ async def create_video(
         size: 分辨率
         seconds: 时长(4, 8, 12)
         quality: 质量
-        image: 第一张图像文件或URL链接(必填)
-        image1: 第二张图像文件或URL链接(可选)
-        image2: 第三张图像文件或URL链接(可选)
+        image: 第一张图像文件/URL/base64(必填)
+        image1: 第二张图像URL/base64(可选)
+        image2: 第三张图像URL/base64(可选)
 
     Returns:
         视频任务响应
     """
 
-    # 参数验证 - 必须提供至少一张图片（本地文件或URL）
+    # 检测请求类型并提取参数
+    content_type = request.headers.get("content-type", "")
+    
+    # JSON格式请求
+    if "application/json" in content_type or prompt is None:
+        try:
+            body = await request.json()
+            prompt = body.get("prompt")
+            model = body.get("model")
+            size = body.get("size")
+            seconds = body.get("seconds")
+            quality = body.get("quality")
+            json_image = body.get("image")
+            json_image1 = body.get("image1")
+            json_image2 = body.get("image2")
+            
+            # JSON模式：图片只能是URL或Base64
+            has_json_image = any([json_image, json_image1, json_image2])
+            
+            if not has_json_image:
+                raise HTTPException(
+                    status_code=400,
+                    detail="At least one image is required for video generation."
+                )
+            
+            # 处理JSON图片数据
+            from .converter import get_image_weight_config
+            
+            images_data_list = []
+            url_list = [url for url in [json_image, json_image1, json_image2] if url]
+            
+            for url_or_base64 in url_list:
+                try:
+                    # 判断是URL还是Base64
+                    if url_or_base64.startswith('data:image') or len(url_or_base64) > 200:
+                        import base64
+                        if ',' in url_or_base64:
+                            base64_data = url_or_base64.split(',', 1)[1]
+                        else:
+                            base64_data = url_or_base64
+                        images_data_list.append(base64.b64decode(base64_data))
+                    else:
+                        import requests as req_lib
+                        response = req_lib.get(url_or_base64, timeout=30)
+                        response.raise_for_status()
+                        images_data_list.append(response.content)
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Failed to process image: {str(e)}"
+                    )
+            
+            weight_config = get_image_weight_config(len(images_data_list))
+            
+            logger.info(f"JSON mode: Processing {len(images_data_list)} images with weight config: {weight_config}")
+            
+            # 设置默认值
+            model = model or API_CONFIG.default_model
+            size = size or API_CONFIG.default_size
+            seconds = seconds or API_CONFIG.default_seconds
+            
+            if not validate_openai_params(model=model, size=size, seconds=seconds):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid parameter value"
+                )
+            
+            # 创建任务
+            task_manager = get_task_manager()
+            
+            task = await task_manager.create_task(
+                prompt=prompt,
+                model=model,
+                size=size,
+                seconds=seconds,
+                quality=quality or API_CONFIG.default_quality,
+            )
+            
+            background_tasks.add_task(
+                run_generation_task,
+                task_id=task.id,
+                prompt=prompt,
+                images_data=images_data_list,
+                weight_config=weight_config,
+                size=size,
+                seconds=seconds,
+            )
+            
+            return task_to_response(task)
+            
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid JSON request: {str(e)}"
+            )
+    
+    # Form表单格式请求 (原有逻辑)
     # 参数验证 - 必须提供至少一张图片（本地文件或URL）
     has_local_image = image is not None
     has_url_image = any([image_url, image_url1, image_url2])
@@ -537,11 +638,11 @@ async def create_video(
     return task_to_response(task)
 
 
-
 @app.post("/v1/videos/360", response_model=VideoResponse)
 async def create_video_360(
     background_tasks: BackgroundTasks,
-    prompt: str = Form(...),
+    request: Request,
+    prompt: str = Form(None),
     model: Optional[str] = Form(None),
     size: Optional[str] = Form(None),
     seconds: Optional[str] = Form(None),
@@ -553,9 +654,12 @@ async def create_video_360(
 
     360-Degree Character Rotation - 基于输入图像生成360度旋转视频
 
-    支持两种图片输入方式:
-    1. 本地文件上传 - 使用image参数
-    2. URL链接 - 使用image_url参数
+    支持两种请求格式:
+    1. multipart/form-data: 本地文件或URL链接
+       - image: 本地图像文件
+       - image_url: 图像URL链接
+    2. application/json: URL链接或Base64
+       - image: 图片URL或base64
 
     Args:
         prompt: 文本提示词(必填)
@@ -563,13 +667,95 @@ async def create_video_360(
         size: 分辨率(推荐1280x720)
         seconds: 时长(推荐5秒确保完整360度旋转)
         quality: 质量
-        image: 本地图像文件(可选，与image_url二选一)
-        image_url: 图像URL链接(可选，与image二选一)
+        image: 本地图像文件/URL/base64(必填)
 
     Returns:
         视频任务响应
     """
 
+    # 检测请求类型并提取参数
+    content_type = request.headers.get("content-type", "")
+    
+    # JSON格式请求
+    if "application/json" in content_type or prompt is None:
+        try:
+            body = await request.json()
+            prompt = body.get("prompt")
+            model = body.get("model")
+            size = body.get("size")
+            seconds = body.get("seconds")
+            quality = body.get("quality")
+            json_image = body.get("image")
+            
+            if not json_image:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Image is required for 360-degree video generation."
+                )
+            
+            # 处理JSON图片数据 - URL或Base64
+            image_data = None
+            
+            try:
+                if json_image.startswith('data:image') or len(json_image) > 200:
+                    import base64
+                    if ',' in json_image:
+                        base64_data = json_image.split(',', 1)[1]
+                    else:
+                        base64_data = json_image
+                    image_data = bytearray(base64.b64decode(base64_data))
+                else:
+                    import requests as req_lib
+                    response = req_lib.get(json_image, timeout=30)
+                    response.raise_for_status()
+                    image_data = bytearray(response.content)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to process image: {str(e)}"
+                )
+            
+            # 设置默认值 - 360度推荐5秒
+            model = model or API_CONFIG.default_model
+            size = size or "1280x720"
+            seconds = seconds or "5"
+            
+            if not validate_openai_params(model=model, size=size, seconds=seconds):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid parameter value"
+                )
+            
+            # 创建任务
+            task_manager = get_task_manager()
+            
+            task = await task_manager.create_task(
+                prompt=prompt,
+                model=model,
+                size=size,
+                seconds=seconds,
+                quality=quality or API_CONFIG.default_quality,
+                video_type="360",
+            )
+            
+            background_tasks.add_task(
+                run_generation_task_360,
+                task_id=task.id,
+                prompt=prompt,
+                image_data=image_data,
+                size=size,
+                seconds=seconds,
+            )
+            
+            return task_to_response(task)
+            
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid JSON request: {str(e)}"
+            )
+    
+    # Form表单格式请求 (原有逻辑)
     # 参数验证 - 图片必须提供
     if not image and not image_url:
         raise HTTPException(
@@ -636,6 +822,7 @@ async def create_video_360(
     )
 
     return task_to_response(task)
+
 
 
 @app.get("/v1/videos/{video_id}", response_model=VideoResponse)

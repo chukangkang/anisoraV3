@@ -15,7 +15,7 @@ from .config import GENERATION_CONFIG as GEN_CFG
 logger = logging.getLogger(__name__)
 
 # 默认提示词后缀（质量评分）
-DEFAULT_PROMPT_SUFFIX = "aesthetic score: 5.5. motion score: 3.0. There is no text in the video."
+DEFAULT_PROMPT_SUFFIX = "aesthetic score: 5.5. motion score: 4.0. There is no text in the video."
 
 # 图片权重配置
 IMAGE_WEIGHT_CONFIGS = {
@@ -139,7 +139,7 @@ class ParameterConverter:
         
         # 根据分辨率动态设置sample_shift (与官方逻辑一致)
         if params.size == "480*832" or params.size == "832*480":
-            params.sample_shift = 3.0
+            params.sample_shift = 5.0
         else:
             params.sample_shift = GEN_CFG.sample_shift
         
