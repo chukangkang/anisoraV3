@@ -81,11 +81,11 @@
     "size": "720x1280",
     "seconds": "8",
     "quality": "standard",
-    "status": "processing",
-    "progress": 30,
+    "status": "completed",
+    "progress": 100,
     "created_at": 1775628826,
-    "completed_at": null,
-    "video_path": null,
+    "completed_at": 1775629129,
+    "video_path": "/root/anisoraV3/output_videos_any/video_c7d4534d435c.mp4",
     "error": null,
     "video_type": null
   }

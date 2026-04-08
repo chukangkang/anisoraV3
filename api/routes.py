@@ -384,6 +384,24 @@ def _run_generation_task_360_sync(
         loop.close()
 
 
+@app.post("/v1/chat/completions")
+async def chat_completions():
+    """Chat completions测试接口
+    
+    返回固定的成功响应
+    
+    Returns:
+        固定的成功响应
+    """
+    return JSONResponse(
+        content={
+            "success": True,
+            "message": "测试成功",
+            "data": "hi"
+        }
+    )
+
+
 @app.get("/v1/videos")
 async def list_videos(limit: int = 20, before: Optional[str] = None):
      """列出视频(GET /v1/videos)
