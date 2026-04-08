@@ -11,6 +11,7 @@
 - ✅ **多图权重控制** - 根据图片数量自动设置权重配置
 - ✅ **360度角色旋转** - 支持360度角色旋转视频生成
 - ✅ **提示词增强** - 自动追加质量评分参数
+- ✅ **统一图片参数** - `image`, `image1`, `image2` 同时支持本地文件和URL链接
 
 ## 支持的参数
 
@@ -39,7 +40,7 @@ python run_api.py
 
 ### 创建视频任务 (POST /v1/videos)
 
-图像转视频(I2V)模式，需要提供输入图像。支持单图、双图和三图上传。
+图像转视频(I2V)模式，需要提供输入图像。支持单图、双图和三图上传。每个图片参数同时支持本地文件或URL链接。
 
 #### 单图上传（本地文件）
 
@@ -81,7 +82,7 @@ curl -X POST http://localhost:8000/v1/videos \
   -F "prompt=A cat playing piano on stage" \
   -F "size=720x1280" \
   -F "seconds=8" \
-  -F "image_url=https://example.com/image.jpg"
+  -F "image=https://example.com/image.jpg"
 ```
 
 #### 双图上传（URL链接）
@@ -91,8 +92,8 @@ curl -X POST http://localhost:8000/v1/videos \
   -F "prompt=A cat playing piano on stage" \
   -F "size=720x1280" \
   -F "seconds=8" \
-  -F "image_url=https://example.com/image1.jpg" \
-  -F "image_url1=https://example.com/image2.jpg"
+  -F "image=https://example.com/image1.jpg" \
+  -F "image1=https://example.com/image2.jpg"
 ```
 
 #### 三图上传（URL链接）
@@ -102,9 +103,9 @@ curl -X POST http://localhost:8000/v1/videos \
   -F "prompt=A cat playing piano on stage" \
   -F "size=720x1280" \
   -F "seconds=8" \
-  -F "image_url=https://example.com/image1.jpg" \
-  -F "image_url1=https://example.com/image2.jpg" \
-  -F "image_url2=https://example.com/image3.jpg"
+  -F "image=https://example.com/image1.jpg" \
+  -F "image1=https://example.com/image2.jpg" \
+  -F "image2=https://example.com/image3.jpg"
 ```
 
 > 注意：系统会自动追加质量评分参数 `aesthetic score: 5.5. motion score: 3.0. There is no text in the video.` 到提示词末尾。
@@ -118,12 +119,12 @@ curl -X POST http://localhost:8000/v1/videos \
   -F "prompt=A cat playing piano on stage" \
   -F "size=720x1280" \
   -F "seconds=8" \
-  -F "image_url=https://example.com/image.jpg"
+  -F "image=https://example.com/image.jpg"
 ```
 
 ### 创建360度旋转视频 (POST /v1/videos/360)
 
-360度角色旋转功能，需要提供输入图像。
+360度角色旋转功能，需要提供输入图像。支持本地文件或URL链接。
 
 #### 本地文件方式
 
@@ -142,7 +143,7 @@ curl -X POST http://localhost:8000/v1/videos/360 \
   -F "prompt=A 360-degree turning and circling video of an anime character..." \
   -F "size=1280x720" \
   -F "seconds=5" \
-  -F "image_url=https://example.com/image.jpg"
+  -F "image=https://example.com/image.jpg"
 ```
 
 > 注意：360度接口必须提供图片（本地文件或URL链接），推荐使用5秒时长以确保完整的360度旋转。
@@ -274,8 +275,8 @@ response = requests.post(
         "size": "720x1280",
         "seconds": "8",
     },
-    # URL链接方式
-    data={"image_url": "https://example.com/image.jpg"}
+    # URL链接方式 - 使用 image 参数
+    data={"image": "https://example.com/image.jpg"}
 )
 
 task = response.json()
@@ -295,8 +296,8 @@ response = requests.post(
         "seconds": "8",
     },
     data={
-        "image_url": "https://example.com/image1.jpg",
-        "image_url1": "https://example.com/image2.jpg"
+        "image": "https://example.com/image1.jpg",
+        "image1": "https://example.com/image2.jpg"
     }
 )
 
@@ -317,9 +318,9 @@ response = requests.post(
         "seconds": "8",
     },
     data={
-        "image_url": "https://example.com/image1.jpg",
-        "image_url1": "https://example.com/image2.jpg",
-        "image_url2": "https://example.com/image3.jpg"
+        "image": "https://example.com/image1.jpg",
+        "image1": "https://example.com/image2.jpg",
+        "image2": "https://example.com/image3.jpg"
     }
 )
 

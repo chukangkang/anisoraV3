@@ -385,7 +385,7 @@ def _run_generation_task_360_sync(
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions():
+async def chat_completions(request: Request):
     """Chat completions测试接口
     
     返回固定的成功响应
@@ -393,6 +393,10 @@ async def chat_completions():
     Returns:
         固定的成功响应
     """
+    # 获取请求体
+    body = await request.json()
+    logger.info(f"chat_completions request: {body}")
+    
     return JSONResponse(
         content={
             "success": True,
@@ -440,18 +444,18 @@ async def create_video(
     seconds: Optional[str] = Form(None),
     quality: Optional[str] = Form(None),
     image: UploadFile = File(default=None),
-    image_url: Optional[str] = Form(default=None),
-    image_url1: Optional[str] = Form(default=None),
-    image_url2: Optional[str] = Form(default=None),
+    image1: UploadFile = File(default=None),
+    image2: UploadFile = File(default=None),
 ):
     """创建视频(POST /v1/videos)
 
     OpenAI兼容接口 - 基于图像生成视频(I2V)
 
     支持两种请求格式:
-    1. multipart/form-data: 本地文件或URL链接
-       - 本地文件: image, image1, image2 (最多3张)
-       - URL链接: image_url, image_url1, image_url2 (最多3张)
+    1. multipart/form-data: 本地文件或URL链接 (最多3张)
+       - image: 第一张图像文件或URL链接 (必填)
+       - image1: 第二张图像文件或URL链接 (可选)
+       - image2: 第三张图像文件或URL链接 (可选)
     2. application/json: URL链接或Base64
        - image, image1, image2 (最多3张)
 
@@ -467,8 +471,8 @@ async def create_video(
         seconds: 时长(4, 8, 12)
         quality: 质量
         image: 第一张图像文件/URL/base64(必填)
-        image1: 第二张图像URL/base64(可选)
-        image2: 第三张图像URL/base64(可选)
+        image1: 第二张图像文件/URL/base64(可选)
+        image2: 第三张图像文件/URL/base64(可选)
 
     Returns:
         视频任务响应
@@ -544,13 +548,19 @@ async def create_video(
             # 创建任务
             task_manager = get_task_manager()
             
-            task = await task_manager.create_task(
-                prompt=prompt,
-                model=model,
-                size=size,
-                seconds=seconds,
-                quality=quality or API_CONFIG.default_quality,
-            )
+            try:
+                task = await task_manager.create_task(
+                    prompt=prompt,
+                    model=model,
+                    size=size,
+                    seconds=seconds,
+                    quality=quality or API_CONFIG.default_quality,
+                )
+            except RuntimeError as e:
+                raise HTTPException(
+                    status_code=503,
+                    detail=str(e)
+                )
             
             background_tasks.add_task(
                 run_generation_task,
@@ -572,19 +582,14 @@ async def create_video(
     
     # Form表单格式请求 (原有逻辑)
     # 参数验证 - 必须提供至少一张图片（本地文件或URL）
-    has_local_image = image is not None
-    has_url_image = any([image_url, image_url1, image_url2])
+    has_image = image is not None
+    has_image1 = image1 is not None
+    has_image2 = image2 is not None
     
-    if not has_local_image and not has_url_image:
+    if not has_image:
         raise HTTPException(
             status_code=400,
             detail="At least one image is required for video generation."
-        )
-
-    if has_local_image and has_url_image:
-        raise HTTPException(
-            status_code=400,
-            detail="Please provide either local files or URL links, not both."
         )
 
     if not validate_openai_params(model=model, size=size, seconds=seconds):
@@ -604,27 +609,32 @@ async def create_video(
     
     images_data_list = []
     
-    if has_local_image:
-        # 本地文件模式 - 收集所有上传的图片
-        for img_file in [image]:
-            if img_file is not None:
+    # 处理图片列表 (image, image1, image2) - 每个都支持本地文件或URL链接
+    for img_file in [image, image1, image2]:
+        if img_file is not None:
+            # 判断是本地文件还是URL链接
+            is_url = False
+            if hasattr(img_file, 'filename') and img_file.filename:
+                # 检查是否是URL (以http://或https://开头)
+                if img_file.filename.startswith('http://') or img_file.filename.startswith('https://'):
+                    is_url = True
+            
+            if is_url:
+                # URL链接模式 - 下载图片
+                try:
+                    import requests as req_lib
+                    response = req_lib.get(img_file.filename, timeout=30)
+                    response.raise_for_status()
+                    images_data_list.append(response.content)
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Failed to download image from URL: {str(e)}"
+                    )
+            else:
+                # 本地文件模式 - 读取上传的文件
                 img_data = await img_file.read()
                 images_data_list.append(img_data)
-    else:
-        # URL链接模式 - 收集所有URL链接
-        url_list = [url for url in [image_url, image_url1, image_url2] if url]
-        
-        for url in url_list:
-            try:
-                import requests
-                response = requests.get(url, timeout=30)
-                response.raise_for_status()
-                images_data_list.append(response.content)
-            except Exception as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Failed to download image from URL: {str(e)}"
-                )
     
     # 根据图片数量获取权重配置
     weight_config = get_image_weight_config(len(images_data_list))
@@ -634,13 +644,19 @@ async def create_video(
     # 创建任务
     task_manager = get_task_manager()
 
-    task = await task_manager.create_task(
-        prompt=prompt,
-        model=model,
-        size=size,
-        seconds=seconds,
-        quality=quality or API_CONFIG.default_quality,
-    )
+    try:
+        task = await task_manager.create_task(
+            prompt=prompt,
+            model=model,
+            size=size,
+            seconds=seconds,
+            quality=quality or API_CONFIG.default_quality,
+        )
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=str(e)
+        )
 
     # 添加后台任务执行生成（传入图片列表和权重配置）
     background_tasks.add_task(
@@ -666,7 +682,6 @@ async def create_video_360(
     seconds: Optional[str] = Form(None),
     quality: Optional[str] = Form(None),
     image: UploadFile = File(None),
-    image_url: Optional[str] = Form(None),
 ):
     """创建360度旋转视频(POST /v1/videos/360)
 
@@ -674,8 +689,7 @@ async def create_video_360(
 
     支持两种请求格式:
     1. multipart/form-data: 本地文件或URL链接
-       - image: 本地图像文件
-       - image_url: 图像URL链接
+       - image: 本地图像文件或URL链接 (必填)
     2. application/json: URL链接或Base64
        - image: 图片URL或base64
 
@@ -747,14 +761,20 @@ async def create_video_360(
             # 创建任务
             task_manager = get_task_manager()
             
-            task = await task_manager.create_task(
-                prompt=prompt,
-                model=model,
-                size=size,
-                seconds=seconds,
-                quality=quality or API_CONFIG.default_quality,
-                video_type="360",
-            )
+            try:
+                task = await task_manager.create_task(
+                    prompt=prompt,
+                    model=model,
+                    size=size,
+                    seconds=seconds,
+                    quality=quality or API_CONFIG.default_quality,
+                    video_type="360",
+                )
+            except RuntimeError as e:
+                raise HTTPException(
+                    status_code=503,
+                    detail=str(e)
+                )
             
             background_tasks.add_task(
                 run_generation_task_360,
@@ -775,16 +795,10 @@ async def create_video_360(
     
     # Form表单格式请求 (原有逻辑)
     # 参数验证 - 图片必须提供
-    if not image and not image_url:
+    if not image:
         raise HTTPException(
             status_code=400,
-            detail="Image is required for 360-degree video generation. Please provide either 'image' (local file) or 'image_url' (URL link)."
-        )
-
-    if image and image_url:
-        raise HTTPException(
-            status_code=400,
-            detail="Please provide only one of 'image' or 'image_url', not both."
+            detail="Image is required for 360-degree video generation."
         )
 
     if not validate_openai_params(model=model, size=size, seconds=seconds):
@@ -801,26 +815,36 @@ async def create_video_360(
     # 创建任务
     task_manager = get_task_manager()
 
-    task = await task_manager.create_task(
-        prompt=prompt,
-        model=model,
-        size=size,
-        seconds=seconds,
-        quality=quality or API_CONFIG.default_quality,
-        video_type="360",  # 标记为360度旋转视频
-    )
+    try:
+        task = await task_manager.create_task(
+            prompt=prompt,
+            model=model,
+            size=size,
+            seconds=seconds,
+            quality=quality or API_CONFIG.default_quality,
+            video_type="360",  # 标记为360度旋转视频
+        )
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=str(e)
+        )
 
-    # 处理图片数据 - 本地文件或URL
+    # 处理图片数据 - 支持本地文件或URL链接
     image_data = None
 
-    if image:
-        # 本地文件上传
-        image_data = await image.read()
-    elif image_url:
-        # URL链接下载
+    # 判断是本地文件还是URL链接
+    is_url = False
+    if hasattr(image, 'filename') and image.filename:
+        # 检查是否是URL (以http://或https://开头)
+        if image.filename.startswith('http://') or image.filename.startswith('https://'):
+            is_url = True
+    
+    if is_url:
+        # URL链接模式 - 下载图片
         try:
-            import requests
-            response = requests.get(image_url, timeout=30)
+            import requests as req_lib
+            response = req_lib.get(image.filename, timeout=30)
             response.raise_for_status()
             image_data = response.content
         except Exception as e:
@@ -828,6 +852,9 @@ async def create_video_360(
                 status_code=400,
                 detail=f"Failed to download image from URL: {str(e)}"
             )
+    else:
+        # 本地文件模式 - 读取上传的文件
+        image_data = await image.read()
 
     # 添加后台任务执行360度生成
     background_tasks.add_task(

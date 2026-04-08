@@ -42,10 +42,14 @@ class VideoTask:
 class TaskManager:
     """任务管理器 - 管理异步视频生成任务 (支持持久化)"""
     
+    # 并发限制配置
+    MAX_CONCURRENT_TASKS = 1  # 最大并发任务数
+    
     def __init__(self):
         """初始化任务管理器"""
         self._tasks: Dict[str, VideoTask] = {}
         self._lock = asyncio.Lock()
+        self._running_count = 0  # 正在运行的任务数量
         
         # 确保数据目录存在并加载已有任务
         self._ensure_data_dir()
@@ -106,7 +110,16 @@ class TaskManager:
             
         Returns:
             创建的任务对象
+            
+        Raises:
+            RuntimeError: 如果已达到最大并发数
         """
+        # 检查并发限制
+        async with self._lock:
+            if self._running_count >= self.MAX_CONCURRENT_TASKS:
+                raise RuntimeError(f"Server is busy, please try again later. Current concurrent tasks: {self._running_count}/{self.MAX_CONCURRENT_TASKS}")
+            self._running_count += 1
+        
         task_id = f"video_{uuid.uuid4().hex[:12]}"
         
         task = VideoTask(
@@ -126,7 +139,7 @@ class TaskManager:
             self._tasks[task_id] = task
             self._save_tasks()  # 持久化保存
             
-        logger.info(f"Created task: {task_id}")
+        logger.info(f"Created task: {task_id}, running count: {self._running_count}")
         
         return task
     
@@ -173,6 +186,9 @@ class TaskManager:
                 
                 if status == VideoStatus.COMPLETED.value or status == VideoStatus.FAILED.value:
                     task.completed_at = int(time.time())
+                    # 任务完成，减少运行计数
+                    self._running_count = max(0, self._running_count - 1)
+                    logger.info(f"Task {task_id} finished, running count: {self._running_count}")
                     
             if progress is not None:
                 task.progress = min(100, max(0, progress))
