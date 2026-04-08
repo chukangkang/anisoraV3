@@ -1,0 +1,38 @@
+nohup: ignoring input
+/root/anisoraV3/wan/modules/model.py:28: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  @amp.autocast(enabled=False)
+/root/anisoraV3/wan/modules/model.py:39: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  @amp.autocast(enabled=False)
+/root/anisoraV3/wan/modules/model_infer.py:29: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  @amp.autocast(enabled=False)
+/root/anisoraV3/wan/modules/model_infer.py:40: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  @amp.autocast(enabled=False)
+[2026-04-07 19:02:06,566] INFO: ==================================================
+[2026-04-07 19:02:06,566] INFO: Starting AnisoraV3 Video Generation API Server
+[2026-04-07 19:02:06,566] INFO: ==================================================
+[2026-04-07 19:02:06,566] INFO: Host: 0.0.0.0
+[2026-04-07 19:02:06,566] INFO: Port: 8000
+[2026-04-07 19:02:06,566] INFO: Workers: 1
+[2026-04-07 19:02:06,566] INFO: Model: Wan2.1-I2V-14B
+[2026-04-07 19:02:06,566] INFO: Distributed: 8-GPU
+[2026-04-07 19:02:06,566] INFO: ==================================================
+INFO:     Started server process [2138592]
+INFO:     Waiting for application startup.
+[2026-04-07 19:02:06,938] INFO: Starting AnisoraV3 Video Generation API...
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     192.168.54.1:52002 - "GET / HTTP/1.1" 404 Not Found
+INFO:     192.168.54.1:56768 - "GET / HTTP/1.1" 404 Not Found
+[2026-04-08 09:22:06,995] INFO: Loaded 9 tasks from disk
+INFO:     192.168.54.1:46850 - "GET /v1/videos HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38852 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48220 - "GET /v1/videos HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44812 - "HEAD /v1/videos/video_1d89b18d77f9/content HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:49216 - "GET /v1/videos/video_1d89b18d77f9 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35480 - "GET /v1/videos/video_1d89b18d77f9/content HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33984 - "HEAD /v1/videos/video_1d89b18d77f9/content HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:54944 - "GET /v1/videos/video_1d89b18d77f9/content HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53910 - "GET /v1/videos/video_1d89b18d77f9/content HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52600 - "GET /v1/videos/video_1d89b18d77f9/content HTTP/1.1" 200 OK
+INFO:     192.168.54.1:38298 - "GET /v1/videos/video_1d89b18d77f9/content HTTP/1.1" 200 OK
+INFO:     192.168.54.1:59452 - "GET /v1/videos/video_1d89b18d77f9/content HTTP/1.1" 200 OK
