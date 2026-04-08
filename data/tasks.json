@@ -201,12 +201,27 @@
     "size": "720x1280",
     "seconds": "10",
     "quality": "standard",
-    "status": "processing",
-    "progress": 30,
+    "status": "completed",
+    "progress": 100,
     "created_at": 1775642652,
-    "completed_at": null,
-    "video_path": null,
+    "completed_at": 1775642988,
+    "video_path": "/root/anisoraV3/output_videos_any/video_0b3cb6cb7e2c.mp4",
     "error": null,
     "video_type": null
+  },
+  {
+    "id": "video_aac112edfcaa",
+    "prompt": "A 360-degree turning and circling video of an anime character. This is a long shot",
+    "model": "sora-2",
+    "size": "720x1280",
+    "seconds": "5",
+    "quality": "standard",
+    "status": "completed",
+    "progress": 100,
+    "created_at": 1775645813,
+    "completed_at": 1775646099,
+    "video_path": "/root/anisoraV3/output_videos_360/video_aac112edfcaa.mp4",
+    "error": null,
+    "video_type": "360"
   }
 ]

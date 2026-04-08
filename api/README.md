@@ -47,6 +47,7 @@ python run_api.py
 ```bash
 curl -X POST http://localhost:8000/v1/videos \
   -F "prompt=A cat playing piano on stage" \
+  -F "model=xly-sora-3" \
   -F "size=720x1280" \
   -F "seconds=8" \
   -F "image=@/path/to/image.jpg"
@@ -57,6 +58,7 @@ curl -X POST http://localhost:8000/v1/videos \
 ```bash
 curl -X POST http://localhost:8000/v1/videos \
   -F "prompt=A cat playing piano on stage" \
+  -F "model=xly-sora-3" \
   -F "size=720x1280" \
   -F "seconds=8" \
   -F "image=@/path/to/image1.jpg" \
@@ -68,6 +70,7 @@ curl -X POST http://localhost:8000/v1/videos \
 ```bash
 curl -X POST http://localhost:8000/v1/videos \
   -F "prompt=A cat playing piano on stage" \
+  -F "model=xly-sora-3" \
   -F "size=720x1280" \
   -F "seconds=8" \
   -F "image=@/path/to/image1.jpg" \
@@ -123,7 +126,7 @@ curl -X POST http://localhost:8000/v1/videos \
 ```
 
 ### 创建360度旋转视频 (POST /v1/videos/360)
-
+通过new API无法添加360 （POST /v1/videos）
 360度角色旋转功能，需要提供输入图像。支持本地文件或URL链接。
 
 #### 本地文件方式
@@ -131,6 +134,7 @@ curl -X POST http://localhost:8000/v1/videos \
 ```bash
 curl -X POST http://localhost:8000/v1/videos/360 \
   -F "prompt=A 360-degree turning and circling video of an anime character..." \
+  -F "model=xly-sora360-3" \
   -F "size=1280x720" \
   -F "seconds=5" \
   -F "image=@/path/to/image.jpg"
@@ -141,6 +145,7 @@ curl -X POST http://localhost:8000/v1/videos/360 \
 ```bash
 curl -X POST http://localhost:8000/v1/videos/360 \
   -F "prompt=A 360-degree turning and circling video of an anime character..." \
+  -F "model=xly-sora360-3" \
   -F "size=1280x720" \
   -F "seconds=5" \
   -F "image=https://example.com/image.jpg"
@@ -208,6 +213,7 @@ response = requests.post(
     "http://localhost:8000/v1/videos",
     data={
         "prompt": "A cat playing piano on stage",
+        "model": "xly-sora-3",
         "size": "720x1280",
         "seconds": "8",
     },
@@ -227,6 +233,7 @@ response = requests.post(
     "http://localhost:8000/v1/videos",
     data={
         "prompt": "A cat playing piano on stage",
+        "model": "xly-sora-3",
         "size": "720x1280",
         "seconds": "8",
     },
@@ -249,6 +256,7 @@ response = requests.post(
     "http://localhost:8000/v1/videos",
     data={
         "prompt": "A cat playing piano on stage",
+        "model": "xly-sora-3",
         "size": "720x1280",
         "seconds": "8",
     },
@@ -272,11 +280,11 @@ response = requests.post(
     "http://localhost:8000/v1/videos",
     data={
         "prompt": "A cat playing piano on stage",
+        "model": "xly-sora-3",
         "size": "720x1280",
         "seconds": "8",
-    },
-    # URL链接方式 - 使用 image 参数
-    data={"image": "https://example.com/image.jpg"}
+        "image": "https://example.com/image.jpg"
+    }
 )
 
 task = response.json()
@@ -292,10 +300,9 @@ response = requests.post(
     "http://localhost:8000/v1/videos",
     data={
         "prompt": "A cat playing piano on stage",
+        "model": "xly-sora-3",
         "size": "720x1280",
         "seconds": "8",
-    },
-    data={
         "image": "https://example.com/image1.jpg",
         "image1": "https://example.com/image2.jpg"
     }
@@ -314,10 +321,9 @@ response = requests.post(
     "http://localhost:8000/v1/videos",
     data={
         "prompt": "A cat playing piano on stage",
+        "model": "xly-sora-3",
         "size": "720x1280",
         "seconds": "8",
-    },
-    data={
         "image": "https://example.com/image1.jpg",
         "image1": "https://example.com/image2.jpg",
         "image2": "https://example.com/image3.jpg"
@@ -353,6 +359,7 @@ response = requests.post(
     "http://localhost:8000/v1/videos/360",
     data={
         "prompt": "A 360-degree turning and circling video of an anime character...",
+        "model": "xly-sora360-3",
         "size": "1280x720",
         "seconds": "5",
     },
